@@ -8,19 +8,22 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 )
 
 type Server struct {
-	adress string
-	router *mux.Router
-	store  *store.Store
+	adress       string
+	router       *mux.Router
+	store        *store.Store
+	sessionStore sessions.Store
 }
 
 // Create new server
-func NewServer(pattern string) *Server {
+func NewServer(pattern string, sessionStore sessions.Store) *Server {
 	return &Server{
-		adress: pattern,
-		router: mux.NewRouter(),
+		adress:       pattern,
+		router:       mux.NewRouter(),
+		sessionStore: sessionStore,
 	}
 }
 
@@ -39,6 +42,7 @@ func (s *Server) Listen() error {
 func (s *Server) configureRouter() {
 	s.router.HandleFunc("/create/user/", s.createUser()).Methods("POST")
 	s.router.HandleFunc("/user/{email}/", s.getUser()).Methods("GET")
+	s.router.HandleFunc("/sessions/", s.createSession()).Methods("POST")
 }
 
 //Configurate store
@@ -57,13 +61,18 @@ func (s *Server) getUser() http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
 		email := mux.Vars(r)["email"]
-		log.Printf("_%v_", email)
 
 		usr, _ := s.store.User().GetUserByEmail(email)
-		log.Println(usr)
-		data, _ := json.Marshal(usr)
+		if usr != nil {
 
-		rw.Write(data)
+			data := model.User{
+				Email:    usr.Email,
+				ID:       usr.ID,
+				Username: usr.Username,
+			}
+
+			json.NewEncoder(rw).Encode(data)
+		}
 	}
 }
 
@@ -79,7 +88,7 @@ func (s *Server) createUser() http.HandlerFunc {
 			log.Println(err)
 		}
 
-		_, err := s.store.User().Create(usr)
+		u, err := s.store.User().Create(usr)
 
 		if err != nil {
 			data := struct {
@@ -87,12 +96,45 @@ func (s *Server) createUser() http.HandlerFunc {
 			}{
 				err,
 			}
-			res, err := json.Marshal(data)
-			if err != nil {
-				log.Println(err)
-			}
+			res, _ := json.Marshal(data)
+
 			w.Write(res)
 			return
 		}
+
+		data := model.User{
+			Email:    u.Email,
+			ID:       u.ID,
+			Username: u.Username,
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}
+}
+
+func (s *Server) createSession() http.HandlerFunc {
+	type request struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	return func(rw http.ResponseWriter, r *http.Request) {
+		req := &request{}
+
+		if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+			return
+		}
+
+		u, err := s.store.User().GetUserByEmail(req.Email)
+
+		if err != nil || !u.ComparePassword(req.Password) {
+			return
+		}
+
+		session, _ := s.sessionStore.Get(r, "api_note")
+
+		session.Values["user_id"] = u.ID
+
+		s.sessionStore.Save(r, rw, session)
 	}
 }

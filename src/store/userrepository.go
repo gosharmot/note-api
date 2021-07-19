@@ -39,4 +39,3 @@ func (u *UserRepository) GetUserByEmail(email string) (*model.User, error) {
 
 	return usr, nil
 }
- 
